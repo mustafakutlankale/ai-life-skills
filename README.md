@@ -35,6 +35,56 @@ Two Obsidian plugins that pair well with the skills — see [`obsidian-plugins/`
 - **unread-dot** (vendored in this repo) — blue dot next to notes with `unread: true` in frontmatter. The summarize skills set this flag on every new note, so this plugin gives you a visual "you have new stuff" indicator in the file explorer.
 - **flashcards-obsidian** (vendored in this repo) — turn `==highlighted==` text, `Question::Answer` syntax, or `#card` tags into Anki cards. Fork of [reuseman/flashcards-obsidian](https://github.com/reuseman/flashcards-obsidian). Requires Anki + AnkiConnect.
 
+## Optional hook: vault-lint
+
+[`hooks/vault-lint.sh`](./hooks/vault-lint.sh) is a Claude Code `PostToolUse` hook that lints any `.md` inside an Obsidian vault the moment Claude writes it — the vault equivalent of "no commit without a passing test". A **block** finding is fed back to Claude so it must fix the note before moving on; a **warn** finding is attached as context only. Files outside a vault (no `.obsidian/` above them) are ignored.
+
+Rules (severity is a policy table at the top of the script — edit to taste):
+
+| rule | default | catches |
+|---|---|---|
+| `root_collision` | block | `[[Claude]]` resolving to a root-level `CLAUDE.md` instead of a note |
+| `case_collision` | block | `[[Serotonin]]` when `serotonin.md` exists — creating it would silently overwrite the original |
+| `block_ref_missing` | block | `[[Note#^id]]` where `^id` isn't at the end of any paragraph in `Note` |
+| `block_ids_joined` | block | a `^id` line followed by a non-blank line (only the last id in a paragraph resolves) |
+| `h1_heading` | block | `# Title` in the body (fenced code ignored) |
+| `no_frontmatter` | block | no `---` block at all |
+| `dangling_link` | warn | link to a note that doesn't exist — minimal mode leaves these on purpose |
+| `unread_missing` | warn | frontmatter without `unread: true` |
+| `summary_too_long` | warn | frontmatter `summary:` over 70 characters |
+
+`_Templates/` and `01 Updates/` are exempt from the frontmatter rules.
+
+**Install:** symlink it next to your other hooks and add it under `PostToolUse` / `Edit|Write` in `~/.claude/settings.json`:
+
+```bash
+mkdir -p ~/.claude/hooks
+ln -sf "$(pwd)/hooks/vault-lint.sh" ~/.claude/hooks/vault-lint.sh
+```
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "/absolute/path/to/.claude/hooks/vault-lint.sh", "timeout": 30 }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Scan an existing vault** (exit 2 if anything blocks):
+
+```bash
+~/.claude/hooks/vault-lint.sh --all ~/ai-vault
+```
+
+Requires `jq` and `python3`.
+
 ## Install — easy mode
 
 Open Claude Code in any directory and paste this:
