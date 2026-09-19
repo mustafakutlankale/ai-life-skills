@@ -738,6 +738,27 @@ For large numbers of missing notes (>10), use parallel subagents (highest availa
 
 After all notes are created, re-run the audit from 5a to confirm zero missing notes. If any remain (e.g. a subagent failed or skipped one), create them manually. **The summary is not done until this verification passes.**
 
+### 5d. Lint every note you wrote
+
+The `vault-lint.sh` PostToolUse hook (see the repo's `hooks/`) only fires on the
+Edit/Write tools. Notes written through Bash heredocs or scripts — the usual way
+this skill emits summaries, transcripts and batches of reference notes — bypass
+it silently. So lint them explicitly before declaring the run done:
+
+```bash
+lint="$HOME/.claude/hooks/vault-lint.sh"
+if [ -x "$lint" ]; then
+  for f in "<summary note>" "<transcript note>" "<each person/reference note written this run>"; do
+    printf '{"tool_input":{"file_path":"%s"}}' "$f" | "$lint" || echo "LINT BLOCK: $f"
+  done
+fi
+```
+
+A `BLOCK` finding (root/case collision, unresolved block ref, joined block IDs,
+`# Title`, missing frontmatter) must be fixed before Step 6. Warnings are
+informational. If the hook is not installed, say so in the daily note and fall
+back to the 5a/5c audit alone.
+
 ## Step 6: Update bases (optional — skip if not using Obsidian Bases)
 
 This step only applies if `$VAULT_ROOT/$BASES_DIR/posts.base` exists. If it doesn't, skip Step 6 entirely.
