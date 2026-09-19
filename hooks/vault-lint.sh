@@ -62,7 +62,7 @@ SEVERITY = {
 # Folders whose files are prompts/templates, not notes: exempt from frontmatter rules.
 EXEMPT_FM = ("_Templates/", "01 Updates/", "_Memory/")
 # Root-level instruction/dashboard files: never valid link targets.
-ROOT_NON_CONTENT = {"CLAUDE.md", "PROJECTS.md", "README.md"}
+ROOT_NON_CONTENT = {"CLAUDE.md", "AGENTS.md", "README.md"}   # PROJECTS.md is a dashboard: linkable
 # Folders never indexed as link targets and never linted.
 EXCLUDE_DIRS = {".obsidian", ".trash", ".Trash", "Clippings", "_Attachments", "node_modules", ".git"}
 SUMMARY_MAX = 70
