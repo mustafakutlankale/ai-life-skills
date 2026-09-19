@@ -123,14 +123,37 @@ Otherwise, ask the user which version to install:
 
 Then copy the chosen template into the user's `_Templates/` folder:
 
+**Resolving the repo path**: this skill is normally *symlinked* into
+`~/.claude/skills/` rather than copied there, so a naive `$skill_dir/../templates/`
+resolves against `~/.claude/skills/templates` — which does not exist — instead of
+the repo root. Resolve the symlink before walking up.
+
+Note also that the shell positional-parameter idiom sometimes used here is not
+meaningful: you are an agent reading this file, not a script being executed, and
+the slash-command loader substitutes the invocation arguments into any such
+placeholder before you ever see it. Use the "Base directory for this skill" path
+from your context as `skill_dir`.
+
 ```bash
-skill_dir="$(dirname "$0")"   # or wherever this SKILL.md lives
+skill_dir="<the 'Base directory for this skill' path from your context>"
+
+# cd -P resolves symlinks physically, so this lands in the real cloned repo
+# even when skill_dir is ~/.claude/skills/summarize -> ~/src/ai-life-skills/summarize
+repo_dir="$(cd -P "$skill_dir" && cd .. && pwd)"
+templates_dir="$repo_dir/templates"
+
+if [ ! -d "$templates_dir" ]; then
+  echo "ERROR: shared templates/ not found at $templates_dir"
+  echo "Expected it as a sibling of the skill dir in the cloned repo."
+  exit 1
+fi
+
 target="$VAULT_ROOT/$TEMPLATES_DIR/new person template.md"
 
 if [ ! -f "$target" ]; then
   # Use the user's choice — default to minimal
-  src="$skill_dir/../templates/new person template (minimal).md"
-  # if user picked full: src="$skill_dir/../templates/new person template.md"
+  src="$templates_dir/new person template (minimal).md"
+  # if user picked full: src="$templates_dir/new person template.md"
   cp "$src" "$target"
 fi
 ```
@@ -175,20 +198,84 @@ For book chapter-by-chapter depth (Step 1 book section), detailed mode gets the 
 ## Step 1: Detect content type and extract text
 
 ### YouTube video
+**Cookies**: do NOT hardcode `--cookies-from-browser chrome`. That flag is a hard
+failure — not a warning — when the named browser isn't installed
+(`ERROR: could not find chrome cookies database in ...`), which breaks the skill
+on any machine using Safari, Arc, Firefox, or a Chrome profile in a non-default
+location. Most public videos need no cookies at all, so try bare first and only
+fall back to a browser if that fails.
+
 ```bash
-# Get metadata
-yt-dlp --cookies-from-browser chrome \
-  --print "%(id)s|%(title)s|%(duration)s|%(upload_date)s|%(view_count)s|%(channel)s|%(channel_id)s" \
-  --no-download "<URL>"
+URL="<URL>"
+FMT="%(id)s|%(title)s|%(duration)s|%(upload_date)s|%(view_count)s|%(channel)s|%(channel_id)s"
+
+# Try with no cookies first. $YTDLP_COOKIES holds the flag (often empty) so the
+# subtitle/audio calls below reuse whatever worked here.
+YTDLP_COOKIES=""
+meta="$(yt-dlp --print "$FMT" --no-download "$URL" 2>/dev/null)"
+
+if [ -z "$meta" ]; then
+  # Bare call failed — likely age-gated, private, region-locked, or a bot check.
+  # Probe browsers that are actually present rather than assuming Chrome.
+  for b in chrome brave edge firefox safari arc chromium vivaldi opera; do
+    meta="$(yt-dlp --cookies-from-browser "$b" --print "$FMT" --no-download "$URL" 2>/dev/null)" || continue
+    if [ -n "$meta" ]; then YTDLP_COOKIES="--cookies-from-browser $b"; break; fi
+  done
+fi
+
+if [ -z "$meta" ]; then
+  echo "ERROR: yt-dlp could not fetch metadata with or without cookies."
+  echo "Video may be private, age-gated, region-locked, or hitting a bot check."
+  exit 1
+fi
+echo "$meta"
 
 # Try auto-subtitles first (fastest, free)
-yt-dlp --cookies-from-browser chrome \
+# $YTDLP_COOKIES is intentionally unquoted — it must word-split into two argv
+# entries, or expand to nothing when empty.
+# shellcheck disable=SC2086
+yt-dlp $YTDLP_COOKIES \
   --write-auto-sub --sub-lang en --sub-format json3 \
-  --skip-download -o "/tmp/summarize/%(id)s" "<URL>"
+  --skip-download -o "/tmp/summarize/%(id)s" "$URL"
 ```
 
+If yt-dlp warns `no impersonate target is available`, it is usually harmless, but
+on videos with stricter bot checks it causes empty results. Fix with
+`brew install curl-impersonate` (or `pip install "yt-dlp[default,curl-cffi]"`).
+
 If auto-subs exist, extract text from the JSON3 file. If not, or if quality is poor:
-- Download audio and transcribe (same as `youtube-transcribe` skill — ask user: local mlx_whisper or ElevenLabs Scribe)
+- Download audio (below) and transcribe (same as `youtube-transcribe` skill — ask user: local mlx_whisper or ElevenLabs Scribe)
+
+**Download the audio** — needed for Step 1c (vault archive + click-to-play) and
+for the transcription fallback. Kick it off in the background right after the
+subtitle fetch so it runs while you read the transcript.
+
+YouTube's default `web` client frequently returns `HTTP Error 403: Forbidden` on
+the media download even when metadata and subtitles worked (the "SABR-only
+streaming experiment" — see yt-dlp issue #12482). `ios`, `android` and `tv`
+clients then fail with `Requested format is not available`. The `mweb` client
+reliably still serves a downloadable format, so fall through a client list
+rather than giving up on the first 403:
+
+```bash
+# shellcheck disable=SC2086
+audio_ok=""
+for client in "" mweb web_safari tv; do
+  extra=""
+  [ -n "$client" ] && extra="--extractor-args youtube:player_client=$client"
+  if yt-dlp $YTDLP_COOKIES $extra -f "bestaudio/best" \
+       -x --audio-format mp3 --audio-quality 5 \
+       -o "/tmp/summarize/%(id)s.%(ext)s" "$URL" >/tmp/summarize/audio.log 2>&1; then
+    audio_ok="yes"; echo "audio ok (client: ${client:-default})"; break
+  fi
+  echo "audio failed (client: ${client:-default}), trying next"
+done
+[ -n "$audio_ok" ] || echo "WARNING: audio download failed on every client — Step 1c will be skipped"
+```
+
+If every client fails, continue without audio: skip Step 1c entirely (no
+`audio:` field, no pinned player, no `▶` jump links) and say so in the daily note.
+The summary and transcript notes are still valid without it.
 
 ### Web article / blog post
 ```bash
@@ -288,8 +375,28 @@ meeting: "[[<Summary Note Title>]]"
 unread: true
 ---
 
-[Full timestamped transcript text, one line per segment]
+**[0:00:00]** First segment text ^p1-0-00-00
+
+**[0:00:13]** Second segment text ^p1-0-00-13
+
+**[0:00:27]** Third segment text ^p1-0-00-27
 ```
+
+**Segment format — every line must be separated by a blank line.** Each segment is
+one paragraph: a bold `**[H:MM:SS]**` timestamp, the text, then a block ID
+`^p1-H-MM-SS` (zero-padded minutes/seconds, matching the timestamp) so the
+summary can embed it with `![[<Title> Transcript#^p1-H-MM-SS]]` and Step 1c can
+derive the audio jump-link offset from the ID.
+
+The blank lines are not cosmetic. Markdown joins consecutive lines into a single
+paragraph, and Obsidian registers only the *last* `^id` of a paragraph — so a
+transcript written as consecutive lines yields exactly one resolvable block, and
+every other quote embed renders as *"Unable to find ^p1-… in … Transcript"*.
+Join segments with `"\n\n"`, not `"\n"`.
+
+Merging raw caption events into ~10-second segments before emitting is fine (and
+makes the block IDs more useful); just keep the segment's start time as its
+timestamp/ID.
 
 **Link from summary:** Add `transcript: "[[<Title> Transcript]]"` to the summary note's frontmatter.
 
@@ -472,6 +579,31 @@ Summary length must be **proportional** to the source material. A 10-minute vide
 4. **`> [!quote]`** callouts for notable quotes (with speaker wikilink and source location if available)
 5. **Wikilink EVERYTHING** — people, places, companies, concepts, technical terms, **book/film/show titles**, even if no note exists yet
 5b. **Never create two separate wikilinks for the same entity.** If a person has a canonical note name plus other handles / real names / pseudonyms, use alias syntax — `[[Cobie|Jordan Fish]]`, `[[Bob Laksiv|King BTC]]` — not two siblings like `[[Cobie]] / [[Jordan Fish]]` or `[[Bob Laksiv]] / [[King BTC]]`. The canonical note is whichever name already exists (or will exist) in `04 People/`; everything else is a display alias pointing at it. Same for companies/products with renames — `[[Facebook|Meta]]`, `[[X|Twitter]]`. When it's natural to mention both, write it as prose: `[[Cobie]] (real name Jordan Fish)`, `[[Bob Laksiv]] (a.k.a. King BTC)`. Rule of thumb: one entity = one link target, always.
+
+5c. **Concept note names are lowercase; capitalise with an alias, never with a second link.**
+This is the most common way rule 5b gets violated in practice. Writing a sentence that
+*begins* with a linked concept invites capitalising it — `[[Quantum entanglement]] is a
+correlation...` — while the same concept mid-sentence is written `[[quantum entanglement]]`.
+That is two link targets for one entity.
+
+The failure is worse than cosmetic, because macOS and Windows filesystems are
+case-insensitive by default while `find -name` is case-*sensitive*:
+
+- The audit in Step 5a looks for `Quantum entanglement.md`, does not find the existing
+  `quantum entanglement.md`, and falsely reports it MISSING.
+- Acting on that false report writes `Quantum entanglement.md`, which **silently
+  overwrites** the real note. No error, no warning, content gone.
+
+So: name concept notes in lowercase (proper nouns keep their capitals — `[[Apple Watch]]`,
+`[[Neville Goddard]]`, `[[Japan]]`). When a sentence starts with one, use the alias form:
+
+```markdown
+[[quantum entanglement|Quantum entanglement]] is a correlation between particles...
+[[behavioral psychology|Behavioral psychology]] explains the chain as...
+```
+
+The reader sees a normally capitalised sentence; the vault sees one note. Before creating
+any note, check case-insensitively whether it already exists (see Step 5a).
 6. **Use actual Japanese/Chinese characters** for non-English words, not romanization
 7. **Timestamps** on topic headings and quotes when available (YouTube, podcasts)
 8. **`people` field**: only people who created/appeared in the content. Mentioned people go in `## People Mentioned`
@@ -498,12 +630,24 @@ grep -oE '\[\[[^]|#^]+' "<summary_note_path>" | sed 's/\[\[//' | sort -u
 
 Then check which ones are missing:
 
+Use `-iname`, **not** `-name`. On case-insensitive filesystems (macOS, Windows) a
+case-sensitive lookup reports an existing note as missing, and creating it then
+silently overwrites the original — see rule 5c.
+
 ```bash
 for term in <each extracted term>; do
-  found=$(find "$VAULT_ROOT" -name "$term.md" \
+  found=$(find "$VAULT_ROOT" -iname "$term.md" \
     -not -path "*/.Trash/*" -not -path "*/Clippings/*" 2>/dev/null | head -1)
   if [ -z "$found" ]; then echo "MISSING: $term"; fi
 done
+```
+
+Also check the extracted list against itself for links that differ only by case — these
+are rule 5c violations that must be collapsed to alias form *before* any note is created:
+
+```bash
+grep -oE '\[\[[^]|#^]+' "<summary_note_path>" | sed 's/\[\[//' | sort -u \
+  | awk '{ k=tolower($0); if (k in seen) print "CASE COLLISION: " seen[k] " vs " $0; else seen[k]=$0 }'
 ```
 
 **Do NOT skip this step. Do NOT estimate from memory which notes exist.** Always run the audit.

@@ -111,7 +111,36 @@ If `$VAULT_ROOT/$TEMPLATES_DIR/new person template.md` does not exist, ask the u
 > 1. **Minimal** (default, works in any vault)
 > 2. **Full** (requires Dataview plugin + Obsidian Bases)
 
-Copy the chosen template from the repo's shared `templates/` directory (sibling of this skill dir, i.e. `../templates/`) into `$VAULT_ROOT/$TEMPLATES_DIR/new person template.md`. If the file already exists, leave it alone — the user may have customized it.
+Copy the chosen template from the repo's shared `templates/` directory into
+`$VAULT_ROOT/$TEMPLATES_DIR/new person template.md`. If the file already exists,
+leave it alone — the user may have customized it.
+
+Do **not** use a plain `../templates/` relative path. This skill is normally
+symlinked into `~/.claude/skills/`, so that resolves to
+`~/.claude/skills/templates` (nonexistent) rather than the repo root. Resolve the
+symlink first:
+
+```bash
+skill_dir="<the 'Base directory for this skill' path from your context>"
+
+# cd -P resolves symlinks physically, so this lands in the real cloned repo
+repo_dir="$(cd -P "$skill_dir" && cd .. && pwd)"
+templates_dir="$repo_dir/templates"
+
+if [ ! -d "$templates_dir" ]; then
+  echo "ERROR: shared templates/ not found at $templates_dir"
+  exit 1
+fi
+
+target="$VAULT_ROOT/$TEMPLATES_DIR/new person template.md"
+
+if [ ! -f "$target" ]; then
+  # Use the user's choice — default to minimal
+  src="$templates_dir/new person template (minimal).md"
+  # if user picked full: src="$templates_dir/new person template.md"
+  cp "$src" "$target"
+fi
+```
 
 Once Step 0 passes, proceed to Step 0.5.
 
@@ -370,7 +399,9 @@ After all notes are created, audit for dangling links. The regex excludes `|` (a
 ```bash
 grep -oE '\[\[[^]|#^]+' "<call_note_path>" | sed 's/\[\[//' | sort -u
 for term in <each>; do
-  found=$(find "$VAULT_ROOT" -name "$term.md" -not -path "*/.Trash/*" 2>/dev/null | head -1)
+  # -iname, not -name: on case-insensitive filesystems a case-sensitive lookup reports
+  # an existing note as missing, and creating it silently overwrites the original.
+  found=$(find "$VAULT_ROOT" -iname "$term.md" -not -path "*/.Trash/*" 2>/dev/null | head -1)
   [ -z "$found" ] && echo "MISSING: $term"
 done
 ```
