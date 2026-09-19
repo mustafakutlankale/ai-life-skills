@@ -20,10 +20,25 @@ DAILY_DIR="${DAILY_DIR:-02 Daily}"
 
 out=""
 
+# 0. Inbox items captured from chat and not yet filed (status: new)
+INBOX_DIR="${INBOX_DIR:-00 Inbox}"
+if [ -d "$VAULT/$INBOX_DIR" ]; then
+  new_items=$(grep -l '^status: new' "$VAULT/$INBOX_DIR"/*.md 2>/dev/null)
+  n=$(printf '%s\n' "$new_items" | grep -c . 2>/dev/null)
+  if [ "$n" -gt 0 ]; then
+    out+="Inbox — dosyalanmamış $n kayıt ($INBOX_DIR/), önce bunları yerine koy:"$'\n'
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      kind=$(sed -n 's/^kind: *//p' "$f" | head -1)
+      out+="  - [$kind] $(basename "$f" .md)"$'\n'
+    done <<< "$new_items"
+  fi
+fi
+
 # 1. Decisions awaiting review (status: proposed)
 if [ -d "$VAULT/$DECISIONS_DIR" ]; then
   pending=$(grep -l '^status: proposed' "$VAULT/$DECISIONS_DIR"/*.md 2>/dev/null)
-  n=$(printf '%s\n' "$pending" | grep -c . 2>/dev/null || echo 0)
+  n=$(printf '%s\n' "$pending" | grep -c . 2>/dev/null)
   if [ "$n" -gt 0 ]; then
     out+="Onay bekleyen kararlar ($n) — $DECISIONS_DIR/:"$'\n'
     while IFS= read -r f; do

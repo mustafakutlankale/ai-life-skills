@@ -85,6 +85,10 @@ ln -sf "$(pwd)/hooks/vault-lint.sh" ~/.claude/hooks/vault-lint.sh
 
 Requires `jq` and `python3`.
 
+## Optional MCP: vault-inbox (chat → vault)
+
+Claude Desktop chat can't run hooks, so by default nothing you discuss there reaches the vault. [`mcp/vault-inbox/`](./mcp/vault-inbox) is a small MCP server that gives chat one narrow door: `capture` writes thoughts / decisions / ideas / questions into `00 Inbox/` (lint-checked), `recall` / `read_note` / `read_memory` let it read the vault, and nothing else is writable. A Claude Code session then files inbox items where they belong. Install and the chat-side instructions: [mcp/vault-inbox/README.md](./mcp/vault-inbox/README.md).
+
 ## Install — easy mode
 
 Open Claude Code in any directory and paste this:
