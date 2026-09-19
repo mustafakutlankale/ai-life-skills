@@ -60,7 +60,7 @@ SEVERITY = {
 }
 
 # Folders whose files are prompts/templates, not notes: exempt from frontmatter rules.
-EXEMPT_FM = ("_Templates/", "01 Updates/")
+EXEMPT_FM = ("_Templates/", "01 Updates/", "_Memory/")
 # Root-level instruction/dashboard files: never valid link targets.
 ROOT_NON_CONTENT = {"CLAUDE.md", "PROJECTS.md", "README.md"}
 # Folders never indexed as link targets and never linted.
@@ -93,6 +93,16 @@ BLOCK_ID_EOL = re.compile(r"\s\^([A-Za-z0-9-]+)\s*$")
 FENCE = re.compile(r"^\s*(```|~~~)")
 
 def resolve(target):
+    # Path-style links ([[05 Projects/x/backlog]]) resolve by full vault-relative
+    # path; bare links resolve by basename anywhere in the vault.
+    if "/" in target:
+        full = os.path.join(VAULT, target + ".md")
+        if os.path.isfile(full):
+            return full, None
+        base = target.rsplit("/", 1)[1]
+        hits = INDEX.get(base.lower(), [])
+        exact = [p for p in hits if os.path.basename(p)[:-3] == base]
+        return None, (exact[0] if exact else None)
     hits = INDEX.get(target.lower(), [])
     exact = [p for p in hits if os.path.basename(p)[:-3] == target]
     variant = [p for p in hits if os.path.basename(p)[:-3] != target]
@@ -162,6 +172,11 @@ def rule_links(n):
                      f"link a content note instead (e.g. [[Claude models|{target}]])")
             continue
         if exact:
+            continue
+        if variant and "/" in target:
+            n.report("dangling_link",
+                     f"[[{target}]] — no note at that path (a note named "
+                     f"'{os.path.basename(variant)[:-3]}' exists at {os.path.relpath(variant, VAULT)})")
             continue
         if variant:
             vname = os.path.basename(variant)[:-3]
