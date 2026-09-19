@@ -181,6 +181,7 @@ The chosen mode determines which steps run:
 
 | Step | Detailed | Minimal |
 |---|---|---|
+| 0.6 New-territory gate | ✓ (asks) | ✓ (defaults + logs) |
 | 1 Extract text | ✓ | ✓ |
 | 1b Save transcript | ✓ | ✓ |
 | 2 Output structure | ✓ | ✓ |
@@ -194,6 +195,58 @@ The chosen mode determines which steps run:
 | 7 Daily note | ✓ | ✓ |
 
 For book chapter-by-chapter depth (Step 1 book section), detailed mode gets the full 300-600 words per chapter; minimal mode gets a flatter single summary regardless of chapter count.
+
+## Step 0.6: New-territory gate (first run of a content type)
+
+The skill's conventions were written for content types it has already seen. The
+first time it meets a *new* one, every convention it applies is a guess — and a
+guess made silently on a first run becomes cleanup work later (the first Turkish
+source in one vault created concept notes that later had to be merged across 200
+links; the first audio-archived summary shipped transcript block IDs that did not
+resolve). So: before extracting anything, check whether this run is a first, and
+if so surface the assumptions instead of applying them.
+
+**Detect.** Decide the content type from the source (YouTube, article, PDF/paper,
+EPUB/book, podcast, lecture) and any sub-variant that changes the output shape
+(audio archived to the vault, cropped segment, multi-part series). Then check
+whether the vault already has an example:
+
+```bash
+type="<youtube|article|paper|book|podcast|lecture>"
+# any existing summary tagged with this type?
+grep -rlE "^\s*-\s*$type\s*$" "$VAULT_ROOT/$SUMMARIES_DIR" --include='*.md' 2>/dev/null | head -1
+# sub-variants: has the vault ever archived audio / cropped a segment?
+grep -rl '^audio:'   "$VAULT_ROOT/$SUMMARIES_DIR" --include='*.md' 2>/dev/null | head -1
+grep -rl '^segment:' "$VAULT_ROOT/$SUMMARIES_DIR" --include='*.md' 2>/dev/null | head -1
+```
+
+A hit means the territory is known — **the gate stays silent and you proceed to
+Step 1.** Do not ask anything. Language, channel and author are deliberately *not*
+triggers: they recur too often, and the vault's own CLAUDE.md governs naming.
+
+**No hit → this is a first.** List, in one message, the assumptions that will
+shape the output and that a later run cannot cheaply undo:
+
+- where the note lands (folder, filename pattern) and which frontmatter extras it gets
+- transcript / audio shape, if any (block-ID format, pinned player, crop offset)
+- depth and structure choices specific to the type (per-chapter sections for a
+  book, `segment:` for a cropped podcast, `authors`/`affiliations` for a paper)
+- anything the vault's CLAUDE.md says that conflicts with this skill's default
+
+Then:
+
+- **Interactive run** (depth was *prompted* in Step 0.5, so a user is present):
+  ask the 2–4 questions that matter, with a recommended option each. Apply the
+  answers, and write them into the daily note under `## notes` so the next run of
+  this type finds them.
+- **Autonomous run** (depth came from the invocation — cron, `/loop`,
+  `/schedule`): do not block. Take the most reversible default for each
+  assumption, proceed, and record every assumption in the daily note as a
+  *decision pending* bullet under `## TODO for next session`. The user reviews
+  and corrects; the notes are cheap to fix, the missed run is not.
+
+Either way the gate fires once per content type per vault. After the first
+summary of that type exists, the detection above finds it and the gate is silent.
 
 ## Step 1: Detect content type and extract text
 
